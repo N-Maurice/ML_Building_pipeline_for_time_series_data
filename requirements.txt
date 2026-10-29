@@ -6,3 +6,11 @@ seaborn
 scikit-learn
 joblib
 ipython
+
+# Task 3 API
+fastapi
+uvicorn
+pymysql
+pymongo
+python-dotenv
+pydantic
