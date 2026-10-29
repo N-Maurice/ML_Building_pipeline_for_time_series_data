@@ -1,0 +1,8 @@
+# Direct notebook dependencies; versions are intentionally not pinned.
+numpy
+pandas
+matplotlib
+seaborn
+scikit-learn
+joblib
+ipython
