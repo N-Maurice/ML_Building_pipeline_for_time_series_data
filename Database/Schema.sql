@@ -50,7 +50,10 @@ CREATE TABLE IF NOT EXISTS order_items (
         FOREIGN KEY (order_id)
         REFERENCES orders(order_id)
 );
-
+ALTER TABLE order_items
+ADD CONSTRAINT fk_items_products
+FOREIGN KEY (product_id)
+REFERENCES products(product_id);
 -- Verify database tables
 SHOW TABLES;
 

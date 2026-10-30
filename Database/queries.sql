@@ -1,3 +1,4 @@
+
 USE olist_project;
 
 -- Query 1: Count orders by day
@@ -20,13 +21,14 @@ ORDER BY orders_count DESC;
 -- Query 3: Daily product sales value
 SELECT
     DATE(o.order_purchase_timestamp) AS sales_date,
+    ROUND(SUM(oi.price), 2) AS daily_sales,
     COUNT(DISTINCT o.order_id) AS total_orders,
-    COUNT(oi.order_id) AS total_items,
-    ROUND(SUM(oi.price), 2) AS daily_sales
+    COUNT(*) AS total_items
 FROM orders o
 JOIN order_items oi
     ON o.order_id = oi.order_id
-WHERE o.order_status NOT IN ('canceled', 'unavailable')
+WHERE o.order_purchase_timestamp >= '2017-01-01'
+  AND o.order_purchase_timestamp < '2018-09-01'
 GROUP BY DATE(o.order_purchase_timestamp)
 ORDER BY sales_date;
 
