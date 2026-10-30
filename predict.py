@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """Task 4 - Fetch from the API, preprocess, load the model, forecast.
 
-(work in progress: step 1 fetches daily sales from the Task 3 API)
+(work in progress: steps 1-2 fetch daily sales and build the Task 1 features)
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -92,6 +94,74 @@ def fetch_daily_history(
 
 
 # --------------------------------------------------------------------------
+# 2. Preprocess (mirrors the Task 1 notebook)
+# --------------------------------------------------------------------------
+def build_daily_frame(raw: pd.DataFrame, origin: pd.Timestamp) -> pd.DataFrame:
+    """Regular daily calendar ending at the origin; days with no sales become 0.
+
+    Task 1 does the same: a zero means "no recorded sales", not verified zero demand.
+    """
+    raw = raw.copy()
+    raw["date"] = pd.to_datetime(raw["sales_date"]).dt.normalize()
+    raw["sales_value"] = pd.to_numeric(raw["daily_sales"], errors="coerce")
+    raw["order_count"] = pd.to_numeric(raw["total_orders"], errors="coerce")
+    raw = raw.dropna(subset=["date", "sales_value"]).drop_duplicates("date", keep="last")
+    raw = raw[raw["date"] <= origin]
+    if (raw["sales_value"] < 0).any():
+        raise ForecastError("The API returned negative daily sales; refusing to forecast.")
+
+    calendar = pd.date_range(origin - pd.Timedelta(days=HISTORY_DAYS + FETCH_DAYS), origin, freq="D", name="date")
+    daily = raw.set_index("date")[["sales_value", "order_count"]].reindex(calendar)
+
+    window = daily.iloc[-HISTORY_DAYS:]
+    observed = window["sales_value"].notna().mean()
+    if observed < MIN_OBSERVED_FRACTION:
+        raise ForecastError(
+            f"Only {observed:.0%} of the last {HISTORY_DAYS} days have data in the API "
+            f"(need at least {MIN_OBSERVED_FRACTION:.0%}). Not enough history to forecast safely."
+        )
+    daily = daily.dropna(how="all").reindex(calendar).fillna(0.0)
+    return daily.iloc[-HISTORY_DAYS:]
+
+
+def make_features(daily: pd.DataFrame, window_start: pd.Timestamp, feature_order: list[str]) -> pd.DataFrame:
+    """One row of features for the origin day (same definitions as notebook cell 25)."""
+    y = daily["sales_value"]
+    X = pd.DataFrame(index=daily.index)
+    for lag in [0, 1, 6, 7, 13, 27]:
+        X[f"sales_lag_{lag}"] = y.shift(lag)
+    for window in [7, 28]:
+        X[f"sales_mean_{window}"] = y.rolling(window).mean()
+        X[f"sales_std_{window}"] = y.rolling(window).std()
+        X[f"orders_mean_{window}"] = daily["order_count"].rolling(window).mean()
+    X["origin_weekday"] = X.index.dayofweek
+    X["next_day_weekday"] = (X.index + pd.Timedelta(days=1)).dayofweek
+    X["next_day_month"] = (X.index + pd.Timedelta(days=1)).month
+    # The notebook uses the row number from its first day; this is days since window_start.
+    X["time_index"] = (X.index - window_start).days
+
+    row = X.iloc[[-1]]
+    missing = [c for c in feature_order if c not in row.columns]
+    if missing:
+        raise ForecastError(f"metadata.json lists features this script cannot build: {missing}")
+    row = row[feature_order]
+    if row.isna().any(axis=None):
+        raise ForecastError("Not enough history to build every feature (need 28 consecutive days).")
+    return row
+
+
+# --------------------------------------------------------------------------
+# Model metadata
+# --------------------------------------------------------------------------
+def load_metadata() -> dict:
+    path = ARTIFACT_DIR / "metadata.json"
+    if not path.exists():
+        print(f"  note: {path} not found; assuming the tuned random forest and notebook defaults")
+        return {}
+    return json.loads(path.read_text())
+
+
+# --------------------------------------------------------------------------
 def main() -> int:
     parser = argparse.ArgumentParser(description="Forecast the next 7 days of Olist merchandise sales.")
     parser.add_argument("--db", choices=["mysql", "mongo"], default="mysql", help="API data source")
@@ -99,12 +169,17 @@ def main() -> int:
     args = parser.parse_args()
     try:
         origin = pd.Timestamp(args.origin).normalize() if args.origin else None
-        raw, origin = fetch_daily_history(args.db, origin, pd.Timestamp(DEFAULT_WINDOW_END))
+        metadata = load_metadata()
+        window_start = pd.Timestamp(metadata.get("window_start", DEFAULT_WINDOW_START))
+        window_end = pd.Timestamp(metadata.get("window_end", DEFAULT_WINDOW_END))
+        raw, origin = fetch_daily_history(args.db, origin, window_end)
+        daily = build_daily_frame(raw, origin)
+        features = make_features(daily, window_start, metadata.get("features", DEFAULT_FEATURES))
     except ForecastError as exc:
         print(f"\nError: {exc}", file=sys.stderr)
         return 1
     print(f"Fetched {len(raw)} daily records up to {origin.date()}")
-    print(raw.tail())
+    print(features.T)
     return 0
 
 
