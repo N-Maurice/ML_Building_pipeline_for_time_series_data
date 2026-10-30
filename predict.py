@@ -1,7 +1,22 @@
 #!/usr/bin/env python3
 """Task 4 - Fetch from the API, preprocess, load the model, forecast.
 
-(work in progress: steps 1-2 fetch daily sales and build the Task 1 features)
+Forecasts Olist daily merchandise value (sum of item price, BRL) for the next
+seven days, plus their total.
+
+Pipeline
+    1. Fetch recent daily sales from the Task 3 API (MySQL or MongoDB endpoints)
+    2. Preprocess with the same rules as the Task 1 notebook:
+       regular daily calendar, missing days = 0, then the notebook's features
+    3. Load the selected artifact saved by the notebook (models/metadata.json and,
+       when the forest won, models/selected_random_forest.joblib)
+    4. Predict the next 7 days
+
+Usage (API running, see api/README.md):
+    python predict.py                      # latest day in the MySQL API (capped at the training window end)
+    python predict.py --db mongo           # use the MongoDB endpoints
+    python predict.py --origin 2018-08-20  # forecast the 7 days after this date
+    python predict.py --baseline           # force the seasonal-naive baseline
 """
 from __future__ import annotations
 
@@ -11,6 +26,7 @@ import os
 import sys
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 import requests
@@ -151,7 +167,7 @@ def make_features(daily: pd.DataFrame, window_start: pd.Timestamp, feature_order
 
 
 # --------------------------------------------------------------------------
-# Model metadata
+# 3. Load model
 # --------------------------------------------------------------------------
 def load_metadata() -> dict:
     path = ARTIFACT_DIR / "metadata.json"
@@ -161,25 +177,81 @@ def load_metadata() -> dict:
     return json.loads(path.read_text())
 
 
+def uses_forest(metadata: dict, force_baseline: bool) -> bool:
+    if force_baseline:
+        return False
+    selected = metadata.get("selected_experiment", "Tuned random forest")
+    return "forest" in selected.lower()
+
+
+def load_forest(metadata: dict):
+    path = ARTIFACT_DIR / "selected_random_forest.joblib"
+    if not path.exists():
+        raise ForecastError(
+            f"{path} not found. Run the notebook, then copy selected_random_forest.joblib and "
+            "metadata.json from olist_task1_outputs/ into models/ (or use --baseline)."
+        )
+    try:
+        import sklearn
+        trained_with = metadata.get("versions", {}).get("sklearn")
+        if trained_with and trained_with != sklearn.__version__:
+            print(f"  warning: model trained with scikit-learn {trained_with}, running {sklearn.__version__}")
+    except ImportError:
+        pass
+    return joblib.load(path)
+
+
 # --------------------------------------------------------------------------
+# 4. Predict
+# --------------------------------------------------------------------------
+def forecast(daily: pd.DataFrame, features: pd.DataFrame, model) -> np.ndarray:
+    if model is None:  # seasonal naive: repeat the last seven observed days
+        return daily["sales_value"].iloc[-HORIZON:].to_numpy()
+    return np.asarray(model.predict(features))[0]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Forecast the next 7 days of Olist merchandise sales.")
     parser.add_argument("--db", choices=["mysql", "mongo"], default="mysql", help="API data source")
     parser.add_argument("--origin", help="Forecast the 7 days after this date (YYYY-MM-DD); default: latest in API")
+    parser.add_argument("--baseline", action="store_true", help="Use the seasonal-naive baseline instead of the model")
     args = parser.parse_args()
+
     try:
         origin = pd.Timestamp(args.origin).normalize() if args.origin else None
+
         metadata = load_metadata()
         window_start = pd.Timestamp(metadata.get("window_start", DEFAULT_WINDOW_START))
         window_end = pd.Timestamp(metadata.get("window_end", DEFAULT_WINDOW_END))
+
+        print(f"[1/4] Fetching daily sales from the {args.db} API ({API_BASE})")
         raw, origin = fetch_daily_history(args.db, origin, window_end)
+        print(f"      {len(raw)} daily records, forecast origin {origin.date()}")
+
+        print("[2/4] Preprocessing (daily calendar, zero-fill, lag / rolling features)")
+        feature_order = metadata.get("features", DEFAULT_FEATURES)
         daily = build_daily_frame(raw, origin)
-        features = make_features(daily, window_start, metadata.get("features", DEFAULT_FEATURES))
+        features = make_features(daily, window_start, feature_order)
+
+        print("[3/4] Loading model")
+        if uses_forest(metadata, args.baseline):
+            model, label = load_forest(metadata), "Tuned random forest"
+        else:
+            model, label = None, "Seasonal naive (repeat last week)"
+        print(f"      approach: {label}")
+
+        print("[4/4] Forecasting")
+        values = forecast(daily, features, model)
     except ForecastError as exc:
         print(f"\nError: {exc}", file=sys.stderr)
         return 1
-    print(f"Fetched {len(raw)} daily records up to {origin.date()}")
-    print(features.T)
+
+    dates = pd.date_range(origin + pd.Timedelta(days=1), periods=HORIZON)
+    print(f"\nForecast origin (last observed day): {origin.date()}   approach: {label}")
+    print(f"{'date':<12}{'weekday':<11}{'forecast (BRL)':>16}")
+    for d, v in zip(dates, values):
+        print(f"{d.date()!s:<12}{d.day_name():<11}{v:>16,.2f}")
+    print(f"{'7-day total':<23}{values.sum():>16,.2f}")
     return 0
 
 
