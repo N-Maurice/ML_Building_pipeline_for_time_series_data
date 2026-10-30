@@ -12,13 +12,13 @@ The project brings together four parts: preparing and understanding the data, st
 
 ## Project status
 
-The repository currently contains the source CSV files, the Task 1 analysis and modeling notebook, dependency information, and a methodology review. Database implementations, API endpoints, and the integrated prediction script are planned components of the full project.
+The repository currently contains the source CSV files, the Task 1 analysis and modeling notebook, Task 2 database scripts, Task 3 API endpoints, dependency information, and a methodology review. The integrated prediction script is still to be added.
 
 | Component | Current status | Expected outputs |
 | --- | --- | --- |
 | Task 1 — Preprocessing, analysis, and modeling | Notebook available; complete clean-session execution still needs verification | Visualizations, interpretations, experiment comparisons, evaluation tables, and model metadata |
 | Task 2 — MySQL and MongoDB | Planned | ERD, SQL scripts, collection design, sample documents, and query results |
-| Task 3 — CRUD and time-series APIs | Planned | POST, GET, PUT, and DELETE operations for both databases, plus latest-record and date-range queries |
+| Task 3 — CRUD and time-series APIs | FastAPI app in `api/`; CRUD for customers, products, orders, and items on MySQL and MongoDB | POST, GET, PUT, and DELETE for both databases, plus latest-record and date-range queries |
 | Task 4 — Integrated forecasting | Planned | Script that fetches API data, preprocesses it, loads the selected model, and produces a forecast |
 | Final report | Planned | PDF explaining all four tasks, results, and actual team contributions |
 
@@ -142,7 +142,30 @@ The API layer will support **both MySQL and MongoDB**. Each database must expose
 | Latest record | GET | Retrieve the most recent record by the documented timestamp field |
 | Date-range query | GET | Retrieve records between specified dates |
 
-The implementation will document actual routes, request and response examples, validation rules, date-range boundaries, and error responses. Endpoint examples and database query results will form part of the final report. Route names and the API framework have not yet been finalized.
+Full route tables, status codes, curl sequences, and troubleshooting are in [`api/README.md`](api/README.md). The FastAPI app (`api/main.py`) mirrors every operation on `/mysql` and `/mongo` for the four Task 2 stores: customers, products, orders, and order items.
+
+| Operation | Example (MySQL; swap `/mysql` for `/mongo`) |
+| --- | --- |
+| Create | `POST /mysql/customers`, `POST /mysql/products`, `POST /mysql/orders`, `POST /mysql/order-items` |
+| Read list / one | `GET /mysql/orders`, `GET /mysql/orders/{order_id}` (same pattern for the other resources) |
+| Update | `PUT /mysql/orders/{order_id}` |
+| Delete | `DELETE /mysql/orders/{order_id}` (also deletes that order's items) |
+| Latest record | `GET /mysql/orders/latest` |
+| Date range | `GET /mysql/orders/range?start_date=&end_date=` |
+
+Daily merchandise totals use the same exclusion rules as Task 2 Query 3: `GET /mysql/sales/daily` and `GET /mysql/sales/daily/latest`.
+
+Start Docker Desktop, then:
+
+```bash
+docker compose up -d
+uvicorn api.main:app --reload --port 8000
+curl -s http://127.0.0.1:8000/health
+curl -s -X POST http://127.0.0.1:8000/demo/seed
+bash api/test_crud.sh
+```
+
+`POST /demo/seed` inserts `demo-customer-001`, `demo-product-001`, and `demo-order-001` into both databases so MySQL foreign keys are satisfied during testing.
 
 ## Task 4 — Create the prediction and forecast script
 
@@ -164,12 +187,14 @@ The script must handle insufficient history explicitly and keep the forecast ori
 │   └── 1-sales-forecasting-preprocessing-analysis.ipynb
 ├── docs/
 │   └── notebook-analysis.md # Methodology review and limitations
+├── Database/                # MySQL schema, queries, MongoDB design, ERD
+├── api/                     # FastAPI CRUD and time-series endpoints
 ├── .gitignore
-├── requirements.txt         # Current notebook dependencies
+├── requirements.txt
 └── README.md
 ```
 
-Database scripts, API code, the prediction script, and the final report will be added as their respective tasks are implemented.
+The prediction script and the final report will be added as their respective tasks are implemented.
 
 ## Run the available analysis
 
@@ -197,7 +222,7 @@ python -m pip install -r requirements.txt
 
 Open the notebook in a notebook-capable editor using this environment. Before execution, adapt `ROOT` to the local `data/` directory, set `OUT` to a writable output directory, and update the archive destination in the final cell. The notebook currently assumes Kaggle or Colab paths and does not automatically discover this repository's local CSV files.
 
-`requirements.txt` covers the current notebook; database drivers and API dependencies will be added with those components.
+`requirements.txt` covers the notebook and the Task 3 API (`fastapi`, `uvicorn`, `pymysql`, `pymongo`).
 
 ### Generated artifacts
 
