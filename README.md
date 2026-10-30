@@ -19,7 +19,7 @@ The repository currently contains the source CSV files, the Task 1 analysis and 
 | Task 1 — Preprocessing, analysis, and modeling | Notebook available; complete clean-session execution still needs verification | Visualizations, interpretations, experiment comparisons, evaluation tables, and model metadata |
 | Task 2 — MySQL and MongoDB | Planned | ERD, SQL scripts, collection design, sample documents, and query results |
 | Task 3 — CRUD and time-series APIs | FastAPI app in `api/`; CRUD for customers, products, orders, and items on MySQL and MongoDB | POST, GET, PUT, and DELETE for both databases, plus latest-record and date-range queries |
-| Task 4 — Integrated forecasting | Planned | Script that fetches API data, preprocesses it, loads the selected model, and produces a forecast |
+| Task 4 — Integrated forecasting | `predict.py` fetches API data, rebuilds the Task 1 features, loads the selected model, and forecasts the next 7 days | Forecast table (7 daily values and total in BRL) |
 | Final report | Planned | PDF explaining all four tasks, results, and actual team contributions |
 
 ## Dataset and prediction target
@@ -169,14 +169,33 @@ bash api/test_crud.sh
 
 ## Task 4 — Create the prediction and forecast script
 
-The final script will connect the earlier tasks into a reproducible forecasting workflow:
+`predict.py` connects the earlier tasks. It forecasts the next seven days of merchandise value (sum of item `price`, BRL).
 
-1. Fetch historical time-series records from the API, including enough history to build the model's lag and rolling-window features.
-2. Validate and preprocess the response using the cleaning, target, and daily-aggregation rules established in Task 1.
-3. Load the selected forecasting artifact and its metadata.
-4. Build features in the expected order and produce the next seven daily predictions and their total in BRL.
+1. **Fetch:** calls `GET /{mysql|mongo}/sales/daily/latest` and `GET /{mysql|mongo}/sales/daily` for about 35 days of history.
+2. **Preprocess:** builds a regular daily calendar (days with no recorded sales become 0, as in Task 1) and the notebook's features: lags 0, 1, 6, 7, 13, 27; 7- and 28-day rolling mean and standard deviation of sales; 7- and 28-day mean order counts; weekday, next-day weekday and month, and a time index.
+3. **Load model:** reads `models/metadata.json`. If the tuned random forest was selected it loads `models/selected_random_forest.joblib`; if the seasonal-naive baseline won, it repeats the last seven observed days.
+4. **Forecast:** prints the seven daily values and their total.
 
-The script must handle insufficient history explicitly and keep the forecast origin clear. Since the notebook can select the seasonal-naive approach, the integration must support that outcome as well as a saved random forest. The final command and configuration instructions will be documented when the script is implemented.
+### Setup
+
+Copy `selected_random_forest.joblib` and `metadata.json` from the notebook output (`olist_task1_outputs/`) into `models/`. Start the databases and API (see `api/README.md`) and load the Olist data into them.
+
+### Run
+
+```bash
+python predict.py                      # MySQL endpoints, latest day (capped at the end of the training window)
+python predict.py --db mongo           # MongoDB endpoints
+python predict.py --origin 2018-08-20  # forecast the 7 days after a chosen date
+python predict.py --baseline           # seasonal-naive baseline
+```
+
+Set `API_BASE` (default `http://127.0.0.1:8000`) or `MODEL_DIR` (default `models/`) to point elsewhere.
+
+### Behaviour and limits
+
+- The forecast origin is the last observed day. Without `--origin`, the script uses the API's latest day but not past the end of the Task 1 analysis window (31 Aug 2018), because later days are sparsely recorded.
+- It stops with a clear message if the API is unreachable, the history is mostly missing (under 75% of the last 28 days), or the model file is absent.
+- The API's daily totals exclude `canceled` and `unavailable` orders, so training data and API data should use the same status rule.
 
 ## Repository structure
 
@@ -189,12 +208,14 @@ The script must handle insufficient history explicitly and keep the forecast ori
 │   └── notebook-analysis.md # Methodology review and limitations
 ├── Database/                # MySQL schema, queries, MongoDB design, ERD
 ├── api/                     # FastAPI CRUD and time-series endpoints
+├── models/                  # Selected model and metadata.json from the notebook
+├── predict.py               # Task 4 forecast script
 ├── .gitignore
 ├── requirements.txt
 └── README.md
 ```
 
-The prediction script and the final report will be added as their respective tasks are implemented.
+The final report will be added when it is complete.
 
 ## Run the available analysis
 
